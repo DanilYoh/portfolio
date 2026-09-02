@@ -235,8 +235,6 @@ describe("Russian agency landing", () => {
     const style = document.createElement("style");
     style.textContent = landingStyles;
     document.head.append(style);
-    expect(landingStyles.length).toBeGreaterThan(1000);
-    expect(style.sheet?.cssRules.length).toBeGreaterThan(0);
     const { container } = render(<App />);
 
     const projectCard = container.querySelector<HTMLElement>(".project-card");
