@@ -29,7 +29,7 @@ body.is-intro-active {
   will-change: auto;
 }
 
-/* Keep the composited layer at its 5x peak size so the SVG is never upscaled. */
+/* Size the layer for the animation peak so the composited artwork only scales down. */
 .page-intro__brand {
   position: absolute;
   z-index: 1;
