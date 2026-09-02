@@ -136,14 +136,26 @@ describe("Russian agency landing", () => {
   });
 
   it("renders messenger buttons without borders", () => {
-    render(<App />);
+    const style = document.createElement("style");
+    style.textContent = landingStyles;
+    document.head.append(style);
 
-    const messengerLinks = [
-      ...screen.getAllByRole("link", { name: "WhatsApp" }),
-      ...screen.getAllByRole("link", { name: "Telegram" }),
-    ];
+    try {
+      render(<App />);
 
-    messengerLinks.forEach((link) => expect(link).toHaveClass("messenger--filled"));
+      const messengerLinks = [
+        ...screen.getAllByRole("link", { name: "WhatsApp" }),
+        ...screen.getAllByRole("link", { name: "Telegram" }),
+      ];
+
+      messengerLinks.forEach((link) => {
+        const computedStyle = getComputedStyle(link);
+        expect(computedStyle.borderTopStyle).toBe("none");
+        expect(computedStyle.borderTopWidth).toBe("0px");
+      });
+    } finally {
+      style.remove();
+    }
   });
 
   it("moves the projects rail horizontally with a vertical mouse wheel", () => {
