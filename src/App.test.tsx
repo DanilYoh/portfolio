@@ -18,6 +18,57 @@ function endAnimation(element: Element, animationName: string) {
   fireEvent(element, event);
 }
 
+function mockPageScroll(initialLeft = 0, initialTop = 0) {
+  const properties = ["scrollX", "scrollY", "pageXOffset", "pageYOffset", "scrollTo"] as const;
+  const originalDescriptors = new Map(
+    properties.map((property) => [property, Object.getOwnPropertyDescriptor(window, property)]),
+  );
+  let left = initialLeft;
+  let top = initialTop;
+  const scrollTo = vi.fn((first?: number | ScrollToOptions, second?: number) => {
+    if (typeof first === "number") {
+      left = first;
+      top = second ?? 0;
+      return;
+    }
+
+    left = first?.left ?? left;
+    top = first?.top ?? top;
+  });
+
+  Object.defineProperties(window, {
+    scrollX: { configurable: true, get: () => left },
+    scrollY: { configurable: true, get: () => top },
+    pageXOffset: { configurable: true, get: () => left },
+    pageYOffset: { configurable: true, get: () => top },
+    scrollTo: { configurable: true, value: scrollTo },
+  });
+
+  return {
+    get left() {
+      return left;
+    },
+    get top() {
+      return top;
+    },
+    scrollTo,
+    moveTo(nextLeft: number, nextTop: number) {
+      left = nextLeft;
+      top = nextTop;
+    },
+    restore() {
+      properties.forEach((property) => {
+        const descriptor = originalDescriptors.get(property);
+        if (descriptor) {
+          Object.defineProperty(window, property, descriptor);
+        } else {
+          Reflect.deleteProperty(window, property);
+        }
+      });
+    },
+  };
+}
+
 describe("Russian agency landing", () => {
   it("shows a branded opening screen and releases the page after its animation", () => {
     const removeStyles = installLandingStyles();
@@ -61,7 +112,10 @@ describe("Russian agency landing", () => {
   });
 
   it("skips the opening screen when reduced motion is requested", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
     const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(0, 640);
+    window.history.replaceState({}, "", "/#projects");
     Object.defineProperty(window, "matchMedia", {
       configurable: true,
       value: vi.fn().mockReturnValue({ matches: true }),
@@ -74,7 +128,97 @@ describe("Russian agency landing", () => {
       expect(document.body).not.toHaveClass("is-intro-active");
       expect(document.querySelector(".landing")).not.toHaveAttribute("inert");
       expect(window.matchMedia).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+      expect(pageScroll.top).toBe(640);
+      expect(pageScroll.scrollTo).not.toHaveBeenCalled();
     } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("defers a fragment destination until the forced intro completes", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(0, 900);
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    const scrollIntoView = vi.fn(function (this: Element) {
+      pageScroll.moveTo(0, this.id === "projects" ? 900 : 0);
+    });
+    window.history.replaceState({}, "", "/?intro=1#projects");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const projects = document.getElementById("projects");
+      expect(intro).toHaveClass("page-intro--forced");
+      expect(pageScroll.top).toBe(0);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      pageScroll.moveTo(0, 720);
+      fireEvent.scroll(window);
+      expect(pageScroll.top).toBe(0);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      endAnimation(intro, "page-intro-out");
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.instances[0]).toBe(projects);
+      expect(pageScroll.top).toBe(900);
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
+      if (originalScrollIntoView) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+      } else {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("restores a browser-restored position after the intro completes", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(24, 640);
+    window.history.replaceState({}, "", "/");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: false }),
+    });
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      expect(pageScroll.left).toBe(0);
+      expect(pageScroll.top).toBe(0);
+
+      endAnimation(intro, "page-intro-out");
+
+      expect(pageScroll.left).toBe(24);
+      expect(pageScroll.top).toBe(640);
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
       Object.defineProperty(window, "matchMedia", {
         configurable: true,
         value: originalMatchMedia,

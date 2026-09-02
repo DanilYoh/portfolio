@@ -1,4 +1,11 @@
-import { Fragment, type AnimationEvent, useEffect, useRef, useState } from "react";
+import {
+  Fragment,
+  type AnimationEvent,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 
 const assets = {
   brandMark: "/assets/logo-mark.svg",
@@ -231,43 +238,182 @@ function isForcedPageIntroPreview() {
   );
 }
 
-function shouldShowPageIntro() {
-  return isForcedPageIntroPreview() || !prefersReducedMotion();
+function getPageIntroConfig() {
+  const isForcedPreview = isForcedPageIntroPreview();
+
+  return {
+    isForcedPreview,
+    shouldRender: isForcedPreview || !prefersReducedMotion(),
+  };
+}
+
+type DeferredPageDestination = {
+  hash: string;
+  left: number;
+  top: number;
+};
+
+function capturePageDestination(): DeferredPageDestination {
+  return {
+    hash: typeof window === "undefined" ? "" : window.location.hash,
+    left: typeof window === "undefined" ? 0 : window.scrollX,
+    top: typeof window === "undefined" ? 0 : window.scrollY,
+  };
+}
+
+function findHashTarget(hash: string) {
+  const rawId = hash.slice(1);
+  if (!rawId) return null;
+
+  let id = rawId;
+  try {
+    id = decodeURIComponent(rawId);
+  } catch {
+    id = rawId;
+  }
+
+  return document.getElementById(id) ?? document.getElementsByName(id).item(0);
 }
 
 function PageIntro({
+  config,
   onBlockingChange,
 }: {
+  config: ReturnType<typeof getPageIntroConfig>;
   onBlockingChange: (isBlocking: boolean) => void;
 }) {
-  const [isForcedPreview] = useState(isForcedPageIntroPreview);
-  const [shouldRenderIntro] = useState(shouldShowPageIntro);
   const [isComplete, setIsComplete] = useState(false);
   const fallbackTimerRef = useRef<number | null>(null);
+  const hasFinishedRef = useRef(false);
+  const releaseScrollDeferralRef = useRef<((restoreDestination: boolean) => void) | null>(
+    null,
+  );
+  const deferredDestinationRef = useRef<DeferredPageDestination | null>(null);
+  if (deferredDestinationRef.current === null) {
+    deferredDestinationRef.current = capturePageDestination();
+  }
 
-  useEffect(() => {
-    if (!shouldRenderIntro) return;
+  const finishIntro = () => {
+    if (hasFinishedRef.current) return;
+
+    hasFinishedRef.current = true;
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+    setIsComplete(true);
+    onBlockingChange(false);
+  };
+
+  useLayoutEffect(() => {
+    if (!config.shouldRender) return;
+
+    const destination = deferredDestinationRef.current!;
+    const rootStyle = document.documentElement.style;
+    const previousScrollBehavior = rootStyle.getPropertyValue("scroll-behavior");
+    const previousScrollBehaviorPriority = rootStyle.getPropertyPriority("scroll-behavior");
+    const canManageScrollRestoration = "scrollRestoration" in window.history;
+    let previousScrollRestoration: ScrollRestoration | undefined;
+    let managesScrollRestoration = false;
+    let hasCapturedRestoredPosition = destination.left !== 0 || destination.top !== 0;
+    let isDeferringScroll = true;
+
+    const manageScrollRestoration = () => {
+      if (!canManageScrollRestoration || managesScrollRestoration) return;
+
+      previousScrollRestoration = window.history.scrollRestoration;
+      window.history.scrollRestoration = "manual";
+      managesScrollRestoration = true;
+    };
+
+    const holdPageAtTop = () => {
+      const currentLeft = window.scrollX;
+      const currentTop = window.scrollY;
+
+      if (
+        !destination.hash &&
+        !hasCapturedRestoredPosition &&
+        (currentLeft !== 0 || currentTop !== 0)
+      ) {
+        destination.left = currentLeft;
+        destination.top = currentTop;
+        hasCapturedRestoredPosition = true;
+        manageScrollRestoration();
+      }
+
+      if (currentLeft !== 0 || currentTop !== 0) {
+        window.scrollTo({ left: 0, top: 0, behavior: "auto" });
+      }
+    };
+
+    const releaseScrollDeferral = (restoreDestination: boolean) => {
+      if (!isDeferringScroll) return;
+
+      isDeferringScroll = false;
+      window.removeEventListener("scroll", holdPageAtTop);
+      document.body.classList.remove("is-intro-active");
+
+      try {
+        if (restoreDestination) {
+          const hashTarget = findHashTarget(destination.hash);
+          if (hashTarget) {
+            hashTarget.scrollIntoView({ behavior: "auto", block: "start", inline: "nearest" });
+          } else if (destination.left !== 0 || destination.top !== 0) {
+            window.scrollTo({
+              left: destination.left,
+              top: destination.top,
+              behavior: "auto",
+            });
+          }
+        }
+      } finally {
+        if (previousScrollBehavior) {
+          rootStyle.setProperty(
+            "scroll-behavior",
+            previousScrollBehavior,
+            previousScrollBehaviorPriority,
+          );
+        } else {
+          rootStyle.removeProperty("scroll-behavior");
+        }
+        if (managesScrollRestoration && previousScrollRestoration) {
+          window.history.scrollRestoration = previousScrollRestoration;
+        }
+      }
+    };
 
     document.body.classList.add("is-intro-active");
-    fallbackTimerRef.current = window.setTimeout(() => {
-      fallbackTimerRef.current = null;
-      document.body.classList.remove("is-intro-active");
-      setIsComplete(true);
-      onBlockingChange(false);
-    }, INTRO_FALLBACK_DURATION_MS);
+    rootStyle.setProperty("scroll-behavior", "auto");
+    window.addEventListener("scroll", holdPageAtTop, { passive: true });
+    if (destination.hash || hasCapturedRestoredPosition) {
+      manageScrollRestoration();
+    }
+    holdPageAtTop();
+    releaseScrollDeferralRef.current = releaseScrollDeferral;
+    fallbackTimerRef.current = window.setTimeout(finishIntro, INTRO_FALLBACK_DURATION_MS);
 
     return () => {
       if (fallbackTimerRef.current !== null) {
         window.clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
-      document.body.classList.remove("is-intro-active");
+      releaseScrollDeferral(false);
+      if (releaseScrollDeferralRef.current === releaseScrollDeferral) {
+        releaseScrollDeferralRef.current = null;
+      }
     };
-  }, [onBlockingChange, shouldRenderIntro]);
+  }, [config.shouldRender]);
 
-  if (!shouldRenderIntro) return null;
+  useLayoutEffect(() => {
+    if (!isComplete) return;
 
-  const finishIntro = (event: AnimationEvent<HTMLDivElement>) => {
+    releaseScrollDeferralRef.current?.(true);
+    releaseScrollDeferralRef.current = null;
+  }, [isComplete]);
+
+  if (!config.shouldRender) return null;
+
+  const handleAnimationEnd = (event: AnimationEvent<HTMLDivElement>) => {
     if (
       event.target !== event.currentTarget ||
       event.animationName !== "page-intro-out"
@@ -275,21 +421,15 @@ function PageIntro({
       return;
     }
 
-    if (fallbackTimerRef.current !== null) {
-      window.clearTimeout(fallbackTimerRef.current);
-      fallbackTimerRef.current = null;
-    }
-    document.body.classList.remove("is-intro-active");
-    setIsComplete(true);
-    onBlockingChange(false);
+    finishIntro();
   };
 
   return (
     <div
       aria-hidden="true"
-      className={`page-intro${isForcedPreview ? " page-intro--forced" : ""}${isComplete ? " page-intro--complete" : ""}`}
+      className={`page-intro${config.isForcedPreview ? " page-intro--forced" : ""}${isComplete ? " page-intro--complete" : ""}`}
       data-testid="page-intro"
-      onAnimationEnd={finishIntro}
+      onAnimationEnd={handleAnimationEnd}
     >
       <div className="page-intro__brand">
         <span className="page-intro__mark">
@@ -703,7 +843,8 @@ function Footer({ copy }: { copy: SiteCopy }) {
 
 export default function App() {
   const [language, setLanguage] = useState<Language>("ru");
-  const [isIntroBlocking, setIsIntroBlocking] = useState(shouldShowPageIntro);
+  const [introConfig] = useState(getPageIntroConfig);
+  const [isIntroBlocking, setIsIntroBlocking] = useState(introConfig.shouldRender);
   const copy = copyByLanguage[language];
 
   useEffect(() => {
@@ -727,7 +868,7 @@ export default function App() {
 
   return (
     <>
-      <PageIntro onBlockingChange={setIsIntroBlocking} />
+      <PageIntro config={introConfig} onBlockingChange={setIsIntroBlocking} />
       <div className="landing" id="top" inert={isIntroBlocking}>
         <Header copy={copy} language={language} onLanguageChange={setLanguage} />
         <main>
