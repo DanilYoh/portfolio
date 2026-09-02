@@ -1,9 +1,341 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import indexMarkup from "../index.html?raw";
 import App from "./App";
 import landingStyles from "./index.css?inline";
+import introStyles from "./intro.css?inline";
+
+function installLandingStyles() {
+  const style = document.createElement("style");
+  style.textContent = `${landingStyles}\n${introStyles}`;
+  document.head.append(style);
+  return () => style.remove();
+}
+
+function endAnimation(element: Element, animationName: string) {
+  const event = new Event("webkitAnimationEnd", { bubbles: true });
+  Object.defineProperty(event, "animationName", { value: animationName });
+  fireEvent(element, event);
+}
+
+function mockPageScroll(initialLeft = 0, initialTop = 0) {
+  const properties = ["scrollX", "scrollY", "pageXOffset", "pageYOffset", "scrollTo"] as const;
+  const originalDescriptors = new Map(
+    properties.map((property) => [property, Object.getOwnPropertyDescriptor(window, property)]),
+  );
+  let left = initialLeft;
+  let top = initialTop;
+  const scrollTo = vi.fn((first?: number | ScrollToOptions, second?: number) => {
+    if (typeof first === "number") {
+      left = first;
+      top = second ?? 0;
+      return;
+    }
+
+    left = first?.left ?? left;
+    top = first?.top ?? top;
+  });
+
+  Object.defineProperties(window, {
+    scrollX: { configurable: true, get: () => left },
+    scrollY: { configurable: true, get: () => top },
+    pageXOffset: { configurable: true, get: () => left },
+    pageYOffset: { configurable: true, get: () => top },
+    scrollTo: { configurable: true, value: scrollTo },
+  });
+
+  return {
+    get left() {
+      return left;
+    },
+    get top() {
+      return top;
+    },
+    scrollTo,
+    moveTo(nextLeft: number, nextTop: number) {
+      left = nextLeft;
+      top = nextTop;
+    },
+    restore() {
+      properties.forEach((property) => {
+        const descriptor = originalDescriptors.get(property);
+        if (descriptor) {
+          Object.defineProperty(window, property, descriptor);
+        } else {
+          Reflect.deleteProperty(window, property);
+        }
+      });
+    },
+  };
+}
 
 describe("Russian agency landing", () => {
+  it("shows a branded opening screen and releases the page after its animation", () => {
+    const removeStyles = installLandingStyles();
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const introBrand = intro.querySelector(".page-intro__brand");
+      const introLine = intro.querySelector(".page-intro__header-line");
+      const landing = document.querySelector(".landing");
+
+      expect(intro).toHaveAttribute("aria-hidden", "true");
+      expect(document.body).toHaveClass("is-intro-active");
+      expect(landing).toHaveAttribute("inert");
+      expect(intro.querySelector('img[src="/assets/logo-mark.svg"]')).toBeInTheDocument();
+      expect(intro.querySelector('img[src="/assets/logo-mark.png"]')).not.toBeInTheDocument();
+      expect(intro.querySelector('img[src="/assets/logo-ie.svg"]')).toBeInTheDocument();
+      expect(document.querySelector('.brand img[src="/assets/logo-mark.svg"]')).toBeInTheDocument();
+
+      endAnimation(introBrand!, "page-intro-out");
+      endAnimation(intro, "page-intro-brand-flight");
+
+      expect(screen.getByTestId("page-intro")).toBeInTheDocument();
+      expect(document.body).toHaveClass("is-intro-active");
+      expect(landing).toHaveAttribute("inert");
+
+      endAnimation(intro, "page-intro-out");
+
+      expect(intro).toHaveClass("page-intro--complete");
+      expect(document.body).not.toHaveClass("is-intro-active");
+      expect(landing).not.toHaveAttribute("inert");
+      expect(getComputedStyle(intro).opacity).toBe("0");
+      expect(getComputedStyle(intro).pointerEvents).toBe("none");
+      expect(getComputedStyle(intro).willChange).toBe("auto");
+      expect(getComputedStyle(introBrand!).willChange).toBe("auto");
+      expect(getComputedStyle(introLine!).willChange).toBe("auto");
+    } finally {
+      removeStyles();
+    }
+  });
+
+  it("skips the opening screen when reduced motion is requested", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(0, 640);
+    window.history.replaceState({}, "", "/#projects");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+
+    try {
+      render(<App />);
+
+      expect(screen.queryByTestId("page-intro")).not.toBeInTheDocument();
+      expect(document.body).not.toHaveClass("is-intro-active");
+      expect(document.querySelector(".landing")).not.toHaveAttribute("inert");
+      expect(window.matchMedia).toHaveBeenCalledWith("(prefers-reduced-motion: reduce)");
+      expect(pageScroll.top).toBe(640);
+      expect(pageScroll.scrollTo).not.toHaveBeenCalled();
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("defers a fragment destination until the forced intro completes", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(0, 900);
+    const originalScrollIntoView = Object.getOwnPropertyDescriptor(
+      Element.prototype,
+      "scrollIntoView",
+    );
+    const scrollIntoView = vi.fn(function (this: Element) {
+      pageScroll.moveTo(0, this.id === "projects" ? 900 : 0);
+    });
+    window.history.replaceState({}, "", "/?intro=1#projects");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+    Object.defineProperty(Element.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const projects = document.getElementById("projects");
+      expect(intro).toHaveClass("page-intro--forced");
+      expect(pageScroll.top).toBe(0);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      pageScroll.moveTo(0, 720);
+      fireEvent.scroll(window);
+      expect(pageScroll.top).toBe(0);
+      expect(scrollIntoView).not.toHaveBeenCalled();
+
+      endAnimation(intro, "page-intro-out");
+
+      expect(scrollIntoView).toHaveBeenCalledTimes(1);
+      expect(scrollIntoView.mock.instances[0]).toBe(projects);
+      expect(pageScroll.top).toBe(900);
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
+      if (originalScrollIntoView) {
+        Object.defineProperty(Element.prototype, "scrollIntoView", originalScrollIntoView);
+      } else {
+        Reflect.deleteProperty(Element.prototype, "scrollIntoView");
+      }
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("restores a browser-restored position after the intro completes", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    const pageScroll = mockPageScroll(24, 640);
+    window.history.replaceState({}, "", "/");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: false }),
+    });
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      expect(pageScroll.left).toBe(0);
+      expect(pageScroll.top).toBe(0);
+
+      endAnimation(intro, "page-intro-out");
+
+      expect(pageScroll.left).toBe(24);
+      expect(pageScroll.top).toBe(640);
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      pageScroll.restore();
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("allows the opening animation to be forced for a preview", () => {
+    const originalLocation = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+    const originalMatchMedia = window.matchMedia;
+    window.history.replaceState({}, "", "/?intro=1");
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn().mockReturnValue({ matches: true }),
+    });
+
+    try {
+      render(<App />);
+
+      const forcedIntro = screen.getByTestId("page-intro");
+      expect(forcedIntro).toBeInTheDocument();
+      expect(forcedIntro).toHaveClass("page-intro--forced");
+      expect(document.body).toHaveClass("is-intro-active");
+      expect(document.querySelector(".landing")).toHaveAttribute("inert");
+    } finally {
+      window.history.replaceState({}, "", originalLocation);
+      Object.defineProperty(window, "matchMedia", {
+        configurable: true,
+        value: originalMatchMedia,
+      });
+    }
+  });
+
+  it("blocks pointer interaction and preloads the animated brand mark", () => {
+    const removeStyles = installLandingStyles();
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const parsedIndex = new DOMParser().parseFromString(indexMarkup, "text/html");
+      const preload = parsedIndex.querySelector(
+        'link[rel="preload"][as="image"][href="/assets/logo-mark.svg"]',
+      );
+
+      expect(getComputedStyle(intro).pointerEvents).toBe("auto");
+      expect(preload).not.toBeNull();
+    } finally {
+      removeStyles();
+    }
+  });
+
+  it("renders the vector brand in a high-resolution animation layer", () => {
+    const removeStyles = installLandingStyles();
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const brand = intro.querySelector(".page-intro__brand");
+      const mark = intro.querySelector(".page-intro__mark");
+
+      expect(intro.querySelector('img[src="/assets/logo-mark.svg"]')).toBeInTheDocument();
+      expect(getComputedStyle(brand!).height).toBe("140px");
+      expect(getComputedStyle(brand!).gap).toBe("60px");
+      expect(getComputedStyle(mark!).width).toBe("90px");
+      expect(getComputedStyle(mark!).height).toBe("100px");
+    } finally {
+      removeStyles();
+    }
+  });
+
+  it("keeps the opening background neutral while the brand moves", () => {
+    const removeStyles = installLandingStyles();
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const landing = document.querySelector(".landing");
+      const mark = intro.querySelector(".page-intro__mark");
+      const line = intro.querySelector(".page-intro__header-line");
+      const introStyle = getComputedStyle(intro);
+
+      expect(introStyle.backgroundColor).toBe(getComputedStyle(landing!).backgroundColor);
+      expect(introStyle.backgroundImage).toBe("none");
+      expect(["", "none"]).toContain(introStyle.boxShadow);
+      expect(["", "none"]).toContain(getComputedStyle(mark!).filter);
+      expect(getComputedStyle(line!).backgroundImage).toBe("none");
+    } finally {
+      removeStyles();
+    }
+  });
+
+  it("turns the single lower intro line into the persistent header divider", () => {
+    const removeStyles = installLandingStyles();
+
+    try {
+      render(<App />);
+
+      const intro = screen.getByTestId("page-intro");
+      const brand = intro.querySelector<HTMLElement>(".page-intro__brand");
+      const line = intro.querySelector<HTMLElement>(".page-intro__header-line");
+      const header = document.querySelector(".site-header");
+      const lineStyle = getComputedStyle(line!);
+      const headerStyle = getComputedStyle(header!);
+
+      expect(line).toBeInTheDocument();
+      expect(brand).not.toContainElement(line!);
+      expect(lineStyle.height).toBe("1px");
+      expect(headerStyle.borderBottomWidth).toBe("1px");
+      expect(lineStyle.backgroundColor).toBe(headerStyle.borderBottomColor);
+    } finally {
+      removeStyles();
+    }
+  });
+
   it("renders the primary service and projects structure from the design", () => {
     render(<App />);
 
@@ -111,28 +443,37 @@ describe("Russian agency landing", () => {
   });
 
   it("renders the design service as three decorative layers without the legacy screenshot", () => {
-    render(<App />);
+    const removeStyles = installLandingStyles();
 
-    const designHeading = screen.getByRole("heading", { level: 2, name: "Современный дизайн" });
-    const designCard = designHeading.closest("article");
-    const layers = designCard?.querySelector(".design-card__layers");
+    try {
+      render(<App />);
 
-    expect(designCard).toHaveClass("design-card");
-    expect(designCard).toHaveTextContent(
-      "Понятный UX, продуманные компоненты и консистентный дизайн. Мы строим масштабируемые системы, которые выглядят цельно и вызывают доверие",
-    );
-    expect(layers).toHaveAttribute("aria-hidden", "true");
-    expect(layers?.querySelectorAll(".design-card__layer")).toHaveLength(3);
-    expect(layers?.querySelector("a, button, input, select, textarea, [tabindex]")).toBeNull();
-    expect(designCard?.querySelector(".design-card__visual-panel")).not.toBeInTheDocument();
-    expect(designCard?.querySelector('img[src="/assets/hero-design.png"]')).not.toBeInTheDocument();
+      const designHeading = screen.getByRole("heading", { level: 2, name: "Современный дизайн" });
+      const designCard = designHeading.closest("article");
+      const layers = designCard?.querySelector(".design-card__layers");
+      const designCardStyle = getComputedStyle(designCard!);
 
-    fireEvent.click(screen.getByRole("button", { name: "Выбор языка: RU" }));
-    fireEvent.click(screen.getByRole("option", { name: "EN" }));
-    expect(designCard).toHaveTextContent("Modern design");
-    expect(designCard).toHaveTextContent(
-      "Clear UX, thoughtful components, and a consistent visual system. We build scalable products that feel cohesive and inspire trust",
-    );
+      expect(designCard).toHaveClass("design-card");
+      expect(designCard).toHaveTextContent(
+        "Понятный UX, продуманные компоненты и консистентный дизайн. Мы строим масштабируемые системы, которые выглядят цельно и вызывают доверие",
+      );
+      expect(layers).toHaveAttribute("aria-hidden", "true");
+      expect(layers?.querySelectorAll(".design-card__layer")).toHaveLength(3);
+      expect(layers?.querySelector("a, button, input, select, textarea, [tabindex]")).toBeNull();
+      expect(designCard?.querySelector(".design-card__visual-panel")).not.toBeInTheDocument();
+      expect(designCard?.querySelector('img[src="/assets/hero-design.png"]')).not.toBeInTheDocument();
+      expect(designCardStyle.backgroundColor).toBe("rgba(255, 255, 255, 0.02)");
+      expect(designCardStyle.backgroundImage).toBe("none");
+
+      fireEvent.click(screen.getByRole("button", { name: "Выбор языка: RU" }));
+      fireEvent.click(screen.getByRole("option", { name: "EN" }));
+      expect(designCard).toHaveTextContent("Modern design");
+      expect(designCard).toHaveTextContent(
+        "Clear UX, thoughtful components, and a consistent visual system. We build scalable products that feel cohesive and inspire trust",
+      );
+    } finally {
+      removeStyles();
+    }
   });
 
   it("renders messenger buttons without borders", () => {

@@ -15,6 +15,8 @@
 }
 
 :root {
+  --site-header-height: 77px;
+
   font-family: "Onest", sans-serif;
   color: #fff;
   background: #151515;
@@ -93,7 +95,7 @@ p {
 
 .site-header {
   display: flex;
-  height: 77px;
+  height: var(--site-header-height);
   align-items: center;
   justify-content: space-between;
   border-bottom: 1px solid rgba(255, 255, 255, 0.12);
@@ -521,9 +523,7 @@ p {
   min-height: 380px;
   overflow: hidden;
   padding: 0;
-  background:
-    radial-gradient(circle at 83% 78%, rgba(104, 237, 177, 0.055), transparent 31%),
-    rgba(255, 255, 255, 0.02);
+  background: rgba(255, 255, 255, 0.02);
 }
 
 .design-card__copy {
