@@ -1,0 +1,45 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="1254"
+  height="1254"
+  viewBox="0 0 1254 1254"
+  fill="none"
+>
+  <defs>
+    <g id="mark-shapes">
+      <path d="M626 101C648 101 669 110 690 123L1002 310C1033 329 1033 358 1001 377L663 579C639 593 616 593 591 578L249 377C218 359 217 329 248 310L566 118C586 106 606 101 626 101Z" />
+      <path d="M207 423C186 411 168 425 168 451V799C168 842 187 873 227 898L558 1105C575 1116 597 1104 597 1084V722C597 679 578 648 541 622L207 423Z" />
+      <path d="M1041 425C1063 412 1086 426 1086 452V799C1086 842 1068 875 1030 899L699 1107C679 1120 660 1123 655 1114C650 1104 658 1084 677 1051C698 1016 726 981 759 945L879 816C938 750 978 666 996 574C958 622 922 658 887 693L788 792C744 836 708 883 680 935C659 974 648 1017 647 1065L645 783C643 719 662 671 711 627C731 609 757 592 787 574L1041 425Z" />
+    </g>
+
+    <linearGradient
+      id="mark-base"
+      x1="627"
+      y1="1118"
+      x2="627"
+      y2="101"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#08A766" />
+      <stop offset="0.32" stop-color="#19BD7D" />
+      <stop offset="0.6" stop-color="#2AC789" />
+      <stop offset="0.78" stop-color="#49D99B" />
+      <stop offset="1" stop-color="#75EDB2" />
+    </linearGradient>
+
+    <radialGradient
+      id="mark-highlight"
+      cx="0"
+      cy="0"
+      r="1"
+      gradientTransform="translate(935 365) rotate(136) scale(650 560)"
+      gradientUnits="userSpaceOnUse"
+    >
+      <stop stop-color="#A6FFD3" stop-opacity="0.28" />
+      <stop offset="1" stop-color="#A6FFD3" stop-opacity="0" />
+    </radialGradient>
+  </defs>
+
+  <use href="#mark-shapes" fill="url(#mark-base)" />
+  <use href="#mark-shapes" fill="url(#mark-highlight)" />
+</svg>

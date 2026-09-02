@@ -1,7 +1,7 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, type AnimationEvent, useEffect, useRef, useState } from "react";
 
 const assets = {
-  brandMark: "/assets/logo-mark.png",
+  brandMark: "/assets/logo-mark.svg",
   brandWordmark: "/assets/logo-ie.svg",
   mail: "/assets/mail.svg",
   mailHeader: "/assets/mail-header.svg",
@@ -213,6 +213,96 @@ const copyByLanguage: Record<Language, SiteCopy> = {
     },
   },
 };
+
+const INTRO_FALLBACK_DURATION_MS = 3200;
+
+function prefersReducedMotion() {
+  return (
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+}
+
+function isForcedPageIntroPreview() {
+  return (
+    typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).get("intro") === "1"
+  );
+}
+
+function shouldShowPageIntro() {
+  return isForcedPageIntroPreview() || !prefersReducedMotion();
+}
+
+function PageIntro({
+  onBlockingChange,
+}: {
+  onBlockingChange: (isBlocking: boolean) => void;
+}) {
+  const [isForcedPreview] = useState(isForcedPageIntroPreview);
+  const [shouldRenderIntro] = useState(shouldShowPageIntro);
+  const [isComplete, setIsComplete] = useState(false);
+  const fallbackTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!shouldRenderIntro) return;
+
+    document.body.classList.add("is-intro-active");
+    fallbackTimerRef.current = window.setTimeout(() => {
+      fallbackTimerRef.current = null;
+      document.body.classList.remove("is-intro-active");
+      setIsComplete(true);
+      onBlockingChange(false);
+    }, INTRO_FALLBACK_DURATION_MS);
+
+    return () => {
+      if (fallbackTimerRef.current !== null) {
+        window.clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      document.body.classList.remove("is-intro-active");
+    };
+  }, [onBlockingChange, shouldRenderIntro]);
+
+  if (!shouldRenderIntro) return null;
+
+  const finishIntro = (event: AnimationEvent<HTMLDivElement>) => {
+    if (
+      event.target !== event.currentTarget ||
+      event.animationName !== "page-intro-out"
+    ) {
+      return;
+    }
+
+    if (fallbackTimerRef.current !== null) {
+      window.clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+    document.body.classList.remove("is-intro-active");
+    setIsComplete(true);
+    onBlockingChange(false);
+  };
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`page-intro${isForcedPreview ? " page-intro--forced" : ""}${isComplete ? " page-intro--complete" : ""}`}
+      data-testid="page-intro"
+      onAnimationEnd={finishIntro}
+    >
+      <div className="page-intro__brand">
+        <span className="page-intro__mark">
+          <img src={assets.brandMark} alt="" />
+        </span>
+        <span className="page-intro__wordmark-clip">
+          <img className="page-intro__wordmark" src={assets.brandWordmark} alt="" />
+        </span>
+      </div>
+      <span className="page-intro__header-line" />
+    </div>
+  );
+}
 
 function Brand({ homeLabel }: { homeLabel: string }) {
   return (
@@ -613,6 +703,7 @@ function Footer({ copy }: { copy: SiteCopy }) {
 
 export default function App() {
   const [language, setLanguage] = useState<Language>("ru");
+  const [isIntroBlocking, setIsIntroBlocking] = useState(shouldShowPageIntro);
   const copy = copyByLanguage[language];
 
   useEffect(() => {
@@ -635,13 +726,16 @@ export default function App() {
   }, [copy.meta.description, copy.meta.title, language]);
 
   return (
-    <div className="landing" id="top">
-      <Header copy={copy} language={language} onLanguageChange={setLanguage} />
-      <main>
-        <Services copy={copy.services} />
-        <Projects copy={copy.projects} />
-      </main>
-      <Footer copy={copy} />
-    </div>
+    <>
+      <PageIntro onBlockingChange={setIsIntroBlocking} />
+      <div className="landing" id="top" inert={isIntroBlocking}>
+        <Header copy={copy} language={language} onLanguageChange={setLanguage} />
+        <main>
+          <Services copy={copy.services} />
+          <Projects copy={copy.projects} />
+        </main>
+        <Footer copy={copy} />
+      </div>
+    </>
   );
 }
